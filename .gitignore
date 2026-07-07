@@ -5,3 +5,7 @@ __pycache__/
 node_modules/
 dist/
 .DS_Store
+tsconfig.tsbuildinfo
+hireflow-live-screen.png
+hr-interviewer-polished-candidate.png
+hr-interviewer-smoke-test.png

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 import re
 import uuid
 from typing import Literal
@@ -12,9 +13,15 @@ from pydantic import BaseModel, EmailStr, Field
 
 app = FastAPI(title="AI HR Interviewer API")
 
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -167,6 +174,44 @@ def first_question(interview: Interview) -> str:
     )
 
 
+def skill_question(skill: Skill) -> str:
+    name = skill.name.lower()
+    if "node" in name:
+        return (
+            "Imagine this role owns a Node.js service that suddenly starts timing out during peak traffic. Walk me through "
+            "how you would investigate it, what code or architecture issues you would look for, and how you would make the service more reliable."
+        )
+    if "postgres" in name:
+        return (
+            "Suppose a PostgreSQL query that was fine earlier now takes several seconds in production. How would you diagnose the issue, "
+            "what data would you inspect, and what fixes would you consider before changing application code?"
+        )
+    if "redis" in name:
+        return (
+            "If you added Redis caching to speed up an API, how would you decide what to cache, how long to cache it, "
+            "and how to prevent stale or incorrect data from reaching users?"
+        )
+    if "docker" in name:
+        return (
+            "You need to ship a backend service consistently across local, staging, and production. How would you design the Docker setup, "
+            "keep images small and secure, and debug a container that works locally but fails after deployment?"
+        )
+    if "aws" in name:
+        return (
+            "This role lists AWS as preferred. Which AWS services have you actually used, what did you own, "
+            "and how comfortable are you operating them without step-by-step guidance?"
+        )
+    if "kubernetes" in name:
+        return (
+            "For Kubernetes, what hands-on experience do you have with deployments, services, config, scaling, or debugging pods? "
+            "Please separate what you owned from what your team owned."
+        )
+    return (
+        f"Let's test {skill.name} through a real work scenario. Describe a difficult situation where this skill mattered, "
+        "the options you considered, what you chose, and how you measured whether it worked."
+    )
+
+
 def next_question_for(session: Session, interview: Interview) -> str:
     candidate_turns = [message.content for message in session.messages if message.role == "candidate"]
     latest = candidate_turns[-1] if candidate_turns else ""
@@ -175,8 +220,14 @@ def next_question_for(session: Session, interview: Interview) -> str:
 
     if turn_count == 1:
         return (
-            "Thank you. What made you interested in this role, and which project from your recent "
-            "experience is most relevant to this job description?"
+            "Thank you. What made you interested in this role, and why do you think your background "
+            "is a good match for this job description?"
+        )
+
+    if turn_count == 2:
+        return (
+            "Great. Now pick the one project that best proves your fit for this role. Please explain the business problem, "
+            "your exact contribution, the team size, and the result."
         )
 
     active_skill = next((skill for skill in interview.skills if skill.name == session.current_skill), None)
@@ -191,27 +242,23 @@ def next_question_for(session: Session, interview: Interview) -> str:
     unasked = [skill for skill in interview.skills if slug(skill.name) not in session.asked_skill_ids]
     if active_skill and slug(active_skill.name) not in session.asked_skill_ids:
         return (
-            f"Thanks. I want to validate that {active_skill.name} experience a little more. "
-            "What was the hardest decision you made, what tradeoffs did you consider, and how did you know the solution worked?"
+            f"I need one more concrete detail on {active_skill.name}. What was the toughest decision or issue, "
+            "what alternatives did you consider, and what evidence showed your approach worked?"
         )
 
     if unasked:
         skill = unasked[0]
         session.current_skill = skill.name
-        return (
-            f"I see {skill.name} is important for this role. Please describe a real project where you used it. "
-            "I am looking for your role, the problem, the implementation choices, and the business or technical outcome."
-        )
+        return skill_question(skill)
 
-    if len(candidate_turns) < max(5, len(interview.skills) + 1):
+    if len(candidate_turns) < max(6, len(interview.skills) + 2):
         return (
-            "Now I would like to understand your problem-solving style. Tell me about a production issue or difficult bug "
-            "you handled. How did you investigate it, what did you try first, and what was the final outcome?"
+            "Now I would like to understand how you solve problems. Tell me about a production incident or difficult bug you handled. "
+            "What signals did you check first, what was the root cause, and what did you change to prevent it from recurring?"
         )
 
     return (
-        "Thank you. I have enough information for this initial screening round. "
-        "Is there anything important about your fit for this role that we have not covered yet?"
+        "That completes the interview. Thank you for your time. Please submit the interview now so the recruiter can review your evaluation."
     )
 
 
@@ -260,6 +307,11 @@ def build_evaluation(session: Session, interview: Interview) -> dict:
 @app.get("/")
 def root():
     return {"status": "running", "service": "AI HR Interviewer API"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.post("/interviews", response_model=Interview)
